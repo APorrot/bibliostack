@@ -13,11 +13,9 @@
     "react-dom": "^18.3.1",
     "idb": "^8.0.0",
     "@zxing/browser": "^0.1.5",
-    "@zxing/library": "^0.21.3"
-  },
-  "devDependencies": {
-    "@vitejs/plugin-react": "^4.3.1",
+    "@zxing/library": "^0.21.3",
     "vite": "^5.4.1",
+    "@vitejs/plugin-react": "^4.3.1",
     "vite-plugin-pwa": "^0.20.5"
   }
 }
