@@ -1,5 +1,4 @@
 // src/App.jsx
-import { useState } from 'react'
 import { StoreProvider, useStore } from './store/useStore.jsx'
 import Sidebar    from './components/Sidebar.jsx'
 import HomeView   from './pages/HomeView.jsx'
@@ -10,8 +9,7 @@ import AlertsView from './pages/AlertsView.jsx'
 import BottomNav  from './components/BottomNav.jsx'
 
 function AppInner() {
-  const { view, currentShelf, loading } = useStore()
-  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const { view, loading } = useStore()
 
   if (loading) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100%', flexDirection:'column', gap:16 }}>
@@ -26,27 +24,17 @@ function AppInner() {
       case 'scan':   return <ScanView />
       case 'stats':  return <StatsView />
       case 'alerts': return <AlertsView />
-      default:       return <HomeView onOpenSidebar={() => setSidebarOpen(true)} />
+      default:       return <HomeView />
     }
   }
 
   return (
     <div style={{ display:'flex', height:'100%', overflow:'hidden' }}>
-      {/* Sidebar desktop */}
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-
-      {/* Main area */}
-      <div style={{
-        flex: 1,
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-        paddingTop: 'var(--sat)',
-      }}>
+      <Sidebar />
+      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', paddingTop:'var(--sat)' }}>
         <div style={{ flex:1, overflow:'hidden' }}>
           {renderView()}
         </div>
-        {/* Bottom nav mobile */}
         <BottomNav />
       </div>
     </div>

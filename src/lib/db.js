@@ -1,42 +1,89 @@
 // src/lib/db.js
-// Couche IndexedDB via la librairie `idb` (wrapper Promise sur IndexedDB natif)
 import { openDB } from 'idb'
 
 const DB_NAME = 'bibliostack'
-const DB_VERSION = 1
+const DB_VERSION = 2  // bumped for profiles store
 
 let _db = null
 
 export async function getDB() {
   if (_db) return _db
   _db = await openDB(DB_NAME, DB_VERSION, {
-    upgrade(db) {
-      // ── Étagères ──
-      if (!db.objectStoreNames.contains('shelves')) {
+    upgrade(db, oldVersion) {
+      if (oldVersion < 1) {
         const shelves = db.createObjectStore('shelves', { keyPath: 'id' })
         shelves.createIndex('by-name', 'name')
-      }
-      // ── Livres ──
-      if (!db.objectStoreNames.contains('books')) {
         const books = db.createObjectStore('books', { keyPath: 'id' })
         books.createIndex('by-shelf',  'shelfId')
         books.createIndex('by-status', 'status')
         books.createIndex('by-series', 'series')
         books.createIndex('by-type',   'type')
-      }
-      // ── Paramètres (clé/valeur) ──
-      if (!db.objectStoreNames.contains('settings')) {
         db.createObjectStore('settings')
+      }
+      if (oldVersion < 2) {
+        // ── Profils ──
+        if (!db.objectStoreNames.contains('profiles')) {
+          db.createObjectStore('profiles', { keyPath: 'id' })
+        }
+        // Ajouter profileId aux stores existants
+        if (!db.objectStoreNames.contains('shelves')) {
+          const shelves = db.createObjectStore('shelves', { keyPath: 'id' })
+          shelves.createIndex('by-name', 'name')
+        }
+        if (!db.objectStoreNames.contains('books')) {
+          const books = db.createObjectStore('books', { keyPath: 'id' })
+          books.createIndex('by-shelf',  'shelfId')
+          books.createIndex('by-status', 'status')
+          books.createIndex('by-series', 'series')
+          books.createIndex('by-type',   'type')
+        }
+        if (!db.objectStoreNames.contains('settings')) {
+          db.createObjectStore('settings')
+        }
       }
     }
   })
   return _db
 }
 
-// ── Shelves ──────────────────────────────────────────────────
-export async function getShelves() {
+// ── Profiles ──────────────────────────────────────────────────
+export async function getProfiles() {
   const db = await getDB()
-  return db.getAll('shelves')
+  return db.getAll('profiles')
+}
+export async function saveProfile(profile) {
+  const db = await getDB()
+  await db.put('profiles', profile)
+}
+export async function deleteProfile(id) {
+  const db = await getDB()
+  await db.delete('profiles', id)
+  // Supprimer les étagères et livres du profil
+  const shelves = await db.getAll('shelves')
+  const profileShelves = shelves.filter(s => s.profileId === id)
+  const books = await db.getAll('books')
+  const profileBooks = books.filter(b => b.profileId === id)
+  const tx = db.transaction(['shelves', 'books'], 'readwrite')
+  await Promise.all([
+    ...profileShelves.map(s => tx.objectStore('shelves').delete(s.id)),
+    ...profileBooks.map(b => tx.objectStore('books').delete(b.id)),
+  ])
+  await tx.done
+}
+export async function getCurrentProfileId() {
+  const db = await getDB()
+  return db.get('settings', 'currentProfileId') || null
+}
+export async function setCurrentProfileId(id) {
+  const db = await getDB()
+  await db.put('settings', id, 'currentProfileId')
+}
+
+// ── Shelves ──────────────────────────────────────────────────
+export async function getShelves(profileId) {
+  const db = await getDB()
+  const all = await db.getAll('shelves')
+  return profileId ? all.filter(s => s.profileId === profileId) : all
 }
 export async function saveShelf(shelf) {
   const db = await getDB()
@@ -45,7 +92,6 @@ export async function saveShelf(shelf) {
 export async function deleteShelf(id) {
   const db = await getDB()
   await db.delete('shelves', id)
-  // Supprimer les livres de cette étagère
   const books = await db.getAllFromIndex('books', 'by-shelf', id)
   const tx = db.transaction('books', 'readwrite')
   await Promise.all(books.map(b => tx.store.delete(b.id)))
@@ -82,28 +128,24 @@ export async function setSetting(key, value) {
   await db.put('settings', value, key)
 }
 
-// ── Seed données de démo (premier lancement) ─────────────────
-export async function seedDemoData() {
+// ── Seed (premier lancement) ──────────────────────────────────
+export async function seedDemoData(profileId) {
   const db = await getDB()
-  const existing = await db.count('shelves')
-  if (existing > 0) return // Déjà peuplé
+  const existing = await db.getAll('shelves')
+  const profileShelves = existing.filter(s => s.profileId === profileId)
+  if (profileShelves.length > 0) return
 
   const shelves = [
-    { id: 'disney', name: 'Magazines Disney', desc: 'Collection INDUCKS', emoji: '🦆', type: 'disney', createdAt: Date.now() },
-    { id: 'manga',  name: 'Mangas',           desc: 'Shōnen & shōjo',    emoji: '⚔️', type: 'manga',  createdAt: Date.now() },
-    { id: 'novels', name: 'Romans',            desc: 'SF & fantastique',  emoji: '🚀', type: 'novel',  createdAt: Date.now() },
+    { id: `${profileId}-disney`, profileId, name: 'Magazines Disney', desc: 'Collection INDUCKS', emoji: '🦆', type: 'disney', createdAt: Date.now() },
+    { id: `${profileId}-manga`,  profileId, name: 'Mangas',           desc: 'Shōnen & shōjo',    emoji: '⚔️', type: 'manga',  createdAt: Date.now() },
+    { id: `${profileId}-novels`, profileId, name: 'Romans',            desc: 'SF & fantastique',  emoji: '🚀', type: 'novel',  createdAt: Date.now() },
   ]
   const books = [
-    { id: 'b1', shelfId: 'disney', title: 'Journal de Mickey N°2485', author: 'Collectif', type: 'disney', emoji: '🐭', series: 'Journal de Mickey', volume: 2485, status: 'read',    rating: 4, note: 'Très bel état.', year: 2000, inducks: 'fr/JM 2485', isbn: '', volumes: null, coverUrl: null, createdAt: Date.now() },
-    { id: 'b2', shelfId: 'disney', title: 'Picsou Magazine N°342',    author: 'Collectif', type: 'disney', emoji: '💰', series: 'Picsou Magazine',    volume: 342,  status: 'read',    rating: 5, note: '', year: 1999, inducks: 'fr/PM 342', isbn: '', volumes: null, coverUrl: null, createdAt: Date.now() },
-    { id: 'b3', shelfId: 'disney', title: 'Mickey Parade N°213',      author: 'Collectif', type: 'disney', emoji: '🐭', series: 'Mickey Parade',      volume: 213,  status: 'unread',  rating: 0, note: '', year: 1997, inducks: 'fr/MP 213', isbn: '', volumes: null, coverUrl: null, createdAt: Date.now() },
-    { id: 'b4', shelfId: 'manga',  title: 'Demon Slayer',   author: 'Koyoharu Gotouge', type: 'manga', emoji: '⚔️', series: 'Demon Slayer',   volume: null, status: 'reading', rating: 5, note: 'Excellente série !', year: 2016, inducks: '', isbn: '9782820328847', volumes: [{n:1,s:'read'},{n:2,s:'read'},{n:3,s:'read'},{n:4,s:'read'},{n:5,s:'reading'},{n:6,s:'unread'},{n:7,s:'unread'}], coverUrl: 'https://covers.openlibrary.org/b/isbn/9782820328847-M.jpg', createdAt: Date.now() },
-    { id: 'b5', shelfId: 'manga',  title: 'One Piece',      author: 'Eiichiro Oda',     type: 'manga', emoji: '🌊', series: 'One Piece',      volume: null, status: 'reading', rating: 5, note: 'La référence.', year: 1997, inducks: '', isbn: '9782723430920', volumes: [{n:1,s:'read'},{n:2,s:'read'},{n:3,s:'read'},{n:4,s:'read'},{n:5,s:'read'},{n:6,s:'read'},{n:7,s:'read'},{n:8,s:'reading'},{n:9,s:'unread'},{n:10,s:'unread'}], coverUrl: null, createdAt: Date.now() },
-    { id: 'b6', shelfId: 'novels', title: 'Dune',        author: 'Frank Herbert', type: 'novel', emoji: '🌅', series: 'Dune',    volume: 1, status: 'read',    rating: 5, note: 'Masterpiece absolu.', year: 1965, inducks: '', isbn: '9782266320566', volumes: null, coverUrl: 'https://covers.openlibrary.org/b/isbn/9782266320566-M.jpg', createdAt: Date.now() },
-    { id: 'b7', shelfId: 'novels', title: 'Fondation',   author: 'Isaac Asimov',  type: 'novel', emoji: '🤖', series: 'Fondation', volume: 1, status: 'read',  rating: 5, note: '', year: 1951, inducks: '', isbn: '9782070360536', volumes: null, coverUrl: null, createdAt: Date.now() },
-    { id: 'b8', shelfId: 'novels', title: 'Neuromancien', author: 'William Gibson', type: 'novel', emoji: '💾', series: null, volume: null, status: 'unread', rating: 0, note: '', year: 1984, inducks: '', isbn: '9782253053606', volumes: null, coverUrl: null, createdAt: Date.now() },
+    { id: `${profileId}-b1`, profileId, shelfId: `${profileId}-disney`, title: 'Journal de Mickey N°2485', author: 'Collectif', type: 'disney', emoji: '🐭', series: 'Journal de Mickey', volume: 2485, status: 'read',    rating: 4, note: '', year: 2000, inducks: 'fr/JM 2485', isbn: '', volumes: null, coverUrl: null, createdAt: Date.now() },
+    { id: `${profileId}-b2`, profileId, shelfId: `${profileId}-disney`, title: 'Picsou Magazine N°342',    author: 'Collectif', type: 'disney', emoji: '💰', series: 'Picsou Magazine',    volume: 342,  status: 'read',    rating: 5, note: '', year: 1999, inducks: 'fr/PM 342', isbn: '', volumes: null, coverUrl: null, createdAt: Date.now() },
+    { id: `${profileId}-b3`, profileId, shelfId: `${profileId}-manga`,  title: 'Demon Slayer',   author: 'Koyoharu Gotouge', type: 'manga', emoji: '⚔️', series: 'Demon Slayer', volume: null, status: 'reading', rating: 5, note: '', year: 2016, inducks: '', isbn: '9782820328847', volumes: [{n:1,s:'read'},{n:2,s:'read'},{n:3,s:'read'},{n:4,s:'reading'},{n:5,s:'unread'}], coverUrl: null, createdAt: Date.now() },
+    { id: `${profileId}-b4`, profileId, shelfId: `${profileId}-novels`, title: 'Dune', author: 'Frank Herbert', type: 'novel', emoji: '🌅', series: 'Dune', volume: 1, status: 'read', rating: 5, note: '', year: 1965, inducks: '', isbn: '9782266320566', volumes: null, coverUrl: null, createdAt: Date.now() },
   ]
-
   const tx = db.transaction(['shelves', 'books'], 'readwrite')
   await Promise.all([
     ...shelves.map(s => tx.objectStore('shelves').put(s)),
@@ -112,20 +154,23 @@ export async function seedDemoData() {
   await tx.done
 }
 
-// ── Export JSON ───────────────────────────────────────────────
-export async function exportToJSON() {
-  const [shelves, books] = await Promise.all([getShelves(), getBooks()])
-  return JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), shelves, books }, null, 2)
+// ── Export / Import ───────────────────────────────────────────
+export async function exportToJSON(profileId) {
+  const [profiles, shelves, books] = await Promise.all([getProfiles(), getShelves(profileId), getBooks()])
+  const profileBooks = profileId ? books.filter(b => b.profileId === profileId) : books
+  return JSON.stringify({ version: 2, exportedAt: new Date().toISOString(), profiles, shelves, books: profileBooks }, null, 2)
 }
-
-// ── Import JSON ───────────────────────────────────────────────
 export async function importFromJSON(jsonString) {
   const data = JSON.parse(jsonString)
   const db = await getDB()
-  const tx = db.transaction(['shelves', 'books'], 'readwrite')
-  await Promise.all([
-    ...data.shelves.map(s => tx.objectStore('shelves').put(s)),
-    ...data.books.map(b => tx.objectStore('books').put(b)),
-  ])
+  const stores = ['shelves', 'books']
+  if (data.profiles) stores.push('profiles')
+  const tx = db.transaction(stores, 'readwrite')
+  const ops = [
+    ...( data.shelves  || []).map(s => tx.objectStore('shelves').put(s)),
+    ...( data.books    || []).map(b => tx.objectStore('books').put(b)),
+    ...((data.profiles || []).map(p => tx.objectStore('profiles').put(p))),
+  ]
+  await Promise.all(ops)
   await tx.done
 }
